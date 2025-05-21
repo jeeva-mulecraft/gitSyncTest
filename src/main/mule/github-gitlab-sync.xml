@@ -1,0 +1,459 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd">
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config">
+    <http:listener-connection host="0.0.0.0" port="8081" />
+</http:listener-config>
+
+<http:request-config name="GitHub_API_Request_Configuration" doc:name="HTTP Request configuration">
+    <http:request-connection host="${github.api.url}" />
+    <http:default-headers>
+        <http:default-header key="Authorization" value="token ${github.token}" />
+        <http:default-header key="Accept" value="application/vnd.github.v3+json" />
+        <http:default-header key="Content-Type" value="application/json" />
+    </http:default-headers>
+</http:request-config>
+
+<http:request-config name="GitLab_API_Request_Configuration" doc:name="HTTP Request configuration">
+    <http:request-connection host="${gitlab.api.url}" />
+    <http:default-headers>
+        <http:default-header key="PRIVATE-TOKEN" value="${gitlab.token}" />
+        <http:default-header key="Content-Type" value="application/json" />
+    </http:default-headers>
+</http:request-config>
+	<flow name="github-to-gitlab-sync-flow">
+    <http:listener config-ref="HTTP_Listener_config" path="/webhooks/github" doc:name="GitHub Webhook Listener">
+        <http:response statusCode="200">
+            <http:body><![CDATA[#[output application/json --- {"status": "received"}]]]></http:body>
+        </http:response>
+    </http:listener>
+    
+    <logger level="INFO" message="Received GitHub webhook: #[payload]" doc:name="Log GitHub Event" />
+    
+    <!-- Extract GitHub event type -->
+    <set-variable variableName="eventType" value="#[attributes.headers.'X-GitHub-Event']" doc:name="Extract Event Type" />
+    
+    <!-- Set a sync marker to prevent infinite loops -->
+    <set-variable variableName="syncSource" value="github" doc:name="Mark Sync Source" />
+    
+    <!-- Check if this is a push event -->
+    <choice doc:name="Event Type Router">
+        <when expression="#[vars.eventType == 'push']">
+            <flow-ref name="process-github-push-event" doc:name="Process Push Event" />
+        </when>
+        <when expression="#[vars.eventType == 'create' and payload.ref_type == 'branch']">
+            <flow-ref name="process-github-branch-creation" doc:name="Process Branch Creation" />
+        </when>
+        <when expression="#[vars.eventType == 'repository' and payload.action == 'created']">
+            <flow-ref name="process-github-repo-creation" doc:name="Process Repository Creation" />
+        </when>
+        <otherwise>
+            <logger level="INFO" message="Ignoring unsupported GitHub event: #[vars.eventType]" doc:name="Log Unsupported Event" />
+        </otherwise>
+    </choice>
+</flow>
+	<sub-flow name="process-github-push-event">
+    <logger level="INFO" message="Processing GitHub push event" doc:name="Log Push Processing" />
+    
+    <!-- Extract repository information -->
+    <set-variable variableName="repoName" value="#[payload.repository.name]" doc:name="Extract Repo Name" />
+    <set-variable variableName="branchName" value="#[payload.ref replace 'refs/heads/' with '']" doc:name="Extract Branch Name" />
+    
+    <!-- Check if repo exists in GitLab -->
+    <http:request method="GET" path="/projects/jeeva-mulecraft%2F#[vars.repoName]" config-ref="GitLab_API_Request_Configuration" doc:name="Check Repo Existence">
+        <http:error-response-validator>
+            <http:success-status-code-validator values="200,404" />
+        </http:error-response-validator>
+    </http:request>
+    
+    <choice doc:name="Repository Exists?">
+        <when expression="#[attributes.statusCode == 404]">
+            <!-- Create repository if it doesn't exist -->
+            <flow-ref name="create-gitlab-repo" doc:name="Create GitLab Repository" />
+        </when>
+        <otherwise>
+            <logger level="INFO" message="Repository #[vars.repoName] already exists in GitLab" doc:name="Log Repo Exists" />
+        </otherwise>
+    </choice>
+    
+    <!-- For each commit in the push -->
+    <foreach collection="#[payload.commits]" doc:name="For Each Commit">
+        <!-- Process the commit and push to GitLab -->
+        <set-variable variableName="commitMessage" value="#[payload.message]" doc:name="Extract Commit Message" />
+        <set-variable variableName="commitId" value="#[payload.id]" doc:name="Extract Commit ID" />
+        <set-variable variableName="commitFiles" value="#[payload.added ++ payload.modified ++ payload.removed]" doc:name="Extract Changed Files" />
+        
+        <!-- For each changed file, get content and update in GitLab -->
+        <foreach collection="#[vars.commitFiles]" doc:name="For Each Changed File">
+            <set-variable variableName="filePath" value="#[payload]" doc:name="Set File Path" />
+            
+            <!-- Get file content from GitHub -->
+            <http:request method="GET" path="/repos/jeeva-mulecraft/#[vars.repoName]/contents/#[vars.filePath]" config-ref="GitHub_API_Request_Configuration" doc:name="Get File From GitHub">
+                <http:query-params><![CDATA[#[{
+                        "ref": vars.commitId
+                    }]]]>
+                </http:query-params>
+            </http:request>
+            
+            <!-- Create/update file in GitLab -->
+            <http:request method="PUT" path="/projects/jeeva-mulecraft%2F#[vars.repoName]/repository/files/#[vars.filePath]" config-ref="GitLab_API_Request_Configuration" doc:name="Update File in GitLab">
+                <http:body><![CDATA[#[{
+                        "branch": vars.branchName,
+                        "content": payload.content,
+                        "encoding": "base64",
+                        "commit_message": "Sync: " ++ vars.commitMessage,
+                        "author_name": "MuleSoft Sync Bot",
+                        "author_email": "sync-bot@example.com"
+                    }]]]>
+                </http:body>
+            </http:request>
+        </foreach>
+    </foreach>
+    
+    <logger level="INFO" message="Successfully synchronized GitHub push to GitLab" doc:name="Log Successful Sync" />
+</sub-flow>
+	<sub-flow name="create-gitlab-repo">
+    <logger level="INFO" message="Creating repository #[vars.repoName] in GitLab" doc:name="Log Repo Creation" />
+    
+    <http:request method="POST" path="/projects" config-ref="GitLab_API_Request_Configuration" doc:name="Create GitLab Repository">
+        <http:body>
+            <![CDATA[#[{
+                "name": vars.repoName,
+                "namespace_id": gitlab.owner,
+                "description": "Synced from GitHub",
+                "visibility": "private"
+            }]]]>
+        </http:body>
+    </http:request>
+    
+    <logger level="INFO" message="Created GitLab repository: #[vars.repoName]" doc:name="Log Repo Created" />
+</sub-flow>
+	<sub-flow name="process-github-branch-creation">
+    <logger level="INFO" message="Processing GitHub branch creation event" doc:name="Log Branch Creation Processing" />
+    
+    <set-variable variableName="repoName" value="#[payload.repository.name]" doc:name="Extract Repo Name" />
+    <set-variable variableName="branchName" value="#[payload.ref]" doc:name="Extract Branch Name" />
+    <set-variable variableName="baseBranch" value="#[payload.master_branch default 'main']" doc:name="Extract Base Branch" />
+    
+    <!-- Find GitLab project ID -->
+    <http:request method="GET" path="/projects/jeeva-mulecraft%2F#[vars.repoName]" config-ref="GitLab_API_Request_Configuration" doc:name="Get GitLab Project ID" />
+    
+    <set-variable variableName="gitlabProjectId" value="#[payload.id]" doc:name="Store GitLab Project ID" />
+    
+    <!-- Create branch in GitLab -->
+    <http:request method="POST" path="/projects/#[vars.gitlabProjectId]/repository/branches" config-ref="GitLab_API_Request_Configuration" doc:name="Create Branch in GitLab">
+        <http:body>
+            <![CDATA[#[{
+                "branch": vars.branchName,
+                "ref": vars.baseBranch
+            }]]]>
+        </http:body>
+    </http:request>
+    
+    <logger level="INFO" message="Created branch #[vars.branchName] in GitLab repository #[vars.repoName]" doc:name="Log Branch Created" />
+</sub-flow>
+	<flow name="gitlab-to-github-sync-flow">
+    <http:listener config-ref="HTTP_Listener_config" path="/webhooks/gitlab" doc:name="GitLab Webhook Listener">
+        <http:response statusCode="200">
+            <http:body><![CDATA[#[output application/json --- {"status": "received"}]]]></http:body>
+        </http:response>
+    </http:listener>
+    
+    <logger level="INFO" message="Received GitLab webhook: #[payload]" doc:name="Log GitLab Event" />
+    
+    <!-- Extract GitLab event type -->
+    <set-variable variableName="eventType" value="#[attributes.headers.'X-Gitlab-Event']" doc:name="Extract Event Type" />
+    
+    <!-- Set a sync marker to prevent infinite loops -->
+    <set-variable variableName="syncSource" value="gitlab" doc:name="Mark Sync Source" />
+    
+    <!-- Check event type -->
+    <choice doc:name="Event Type Router">
+        <when expression="#[vars.eventType == 'Push Hook']">
+            <flow-ref name="process-gitlab-push-event" doc:name="Process Push Event" />
+        </when>
+        <when expression="#[vars.eventType == 'Repository Update Hook' and payload.event_name == 'branch_create']">
+            <flow-ref name="process-gitlab-branch-creation" doc:name="Process Branch Creation" />
+        </when>
+        <when expression="#[vars.eventType == 'Repository Update Hook' and payload.event_name == 'create']">
+            <flow-ref name="process-gitlab-repo-creation" doc:name="Process Repository Creation" />
+        </when>
+        <otherwise>
+            <logger level="INFO" message="Ignoring unsupported GitLab event: #[vars.eventType]" doc:name="Log Unsupported Event" />
+        </otherwise>
+    </choice>
+</flow>
+	<sub-flow name="process-gitlab-push-event">
+    <logger level="INFO" message="Processing GitLab push event" doc:name="Log Push Processing" />
+    
+    <!-- Check if this is initiated by our sync to prevent loops -->
+    <choice doc:name="Check for Sync Message">
+        <when expression="#[payload.commits[0].message startsWith 'Sync: ']">
+            <logger level="INFO" message="Skipping sync-originated commit" doc:name="Log Skip Sync Commit" />
+            <flow-ref name="send-success-response" doc:name="Send Success Response" />
+            <stop-processing />
+        </when>
+    </choice>
+    
+    <!-- Extract repository information -->
+    <set-variable variableName="repoName" value="#[payload.project.name]" doc:name="Extract Repo Name" />
+    <set-variable variableName="branchName" value="#[payload.ref replace 'refs/heads/' with '']" doc:name="Extract Branch Name" />
+    
+    <!-- Check if repo exists in GitHub -->
+    <http:request method="GET" path="/repos/${github.owner}/#[vars.repoName]" config-ref="GitHub_API_Request_Configuration" doc:name="Check Repo Existence">
+        <http:error-response-validator>
+            <http:success-status-code-validator values="200,404" />
+        </http:error-response-validator>
+    </http:request>
+    
+    <choice doc:name="Repository Exists?">
+        <when expression="#[attributes.statusCode == 404]">
+            <!-- Create repository if it doesn't exist -->
+            <flow-ref name="create-github-repo" doc:name="Create GitHub Repository" />
+        </when>
+        <otherwise>
+            <logger level="INFO" message="Repository #[vars.repoName] already exists in GitHub" doc:name="Log Repo Exists" />
+        </otherwise>
+    </choice>
+    
+    <!-- For each commit in the push -->
+    <foreach collection="#[payload.commits]" doc:name="For Each Commit">
+        <!-- Process the commit and push to GitHub -->
+        <set-variable variableName="commitMessage" value="#[payload.message]" doc:name="Extract Commit Message" />
+        <set-variable variableName="commitId" value="#[payload.id]" doc:name="Extract Commit ID" />
+        
+        <!-- Get changed files from GitLab commit -->
+        <set-variable variableName="commitFiles" value="#[payload.added ++ payload.modified ++ payload.removed]" doc:name="Extract Changed Files" />
+        
+        <!-- For each changed file, get content and update in GitHub -->
+        <foreach collection="#[vars.commitFiles]" doc:name="For Each Changed File">
+            <set-variable variableName="filePath" value="#[payload]" doc:name="Set File Path" />
+            
+            <!-- Get file content from GitLab -->
+            <http:request method="GET" path="/projects/jeeva-mulecraft%2F#[vars.repoName]/repository/files/#[replaceAll(vars.filePath, '/', '%2F')]" config-ref="GitLab_API_Request_Configuration" doc:name="Get File From GitLab">
+                <http:query-params><![CDATA[#[{
+                        "ref": vars.commitId
+                    }]]]>
+                </http:query-params>
+            </http:request>
+            
+            <!-- Create/update file in GitHub -->
+            <http:request method="PUT" path="/repos/jeeva-mulecraft/#[vars.repoName]/contents/#[vars.filePath]" config-ref="GitHub_API_Request_Configuration" doc:name="Update File in GitHub">
+                <http:body><![CDATA[#[{
+                        "message": "Sync: " ++ vars.commitMessage,
+                        "content": payload.content,
+                        "branch": vars.branchName,
+                        "committer": {
+                            "name": "MuleSoft Sync Bot",
+                            "email": "sync-bot@example.com"
+                        }
+                    }]]]>
+                </http:body>
+            </http:request>
+        </foreach>
+    </foreach>
+    
+    <logger level="INFO" message="Successfully synchronized GitLab push to GitHub" doc:name="Log Successful Sync" />
+</sub-flow>
+	<sub-flow name="create-github-repo">
+    <logger level="INFO" message="Creating repository #[vars.repoName] in GitHub" doc:name="Log Repo Creation" />
+    
+    <http:request method="POST" path="/user/repos" config-ref="GitHub_API_Request_Configuration" doc:name="Create GitHub Repository">
+        <http:body>
+            <![CDATA[#[{
+                "name": vars.repoName,
+                "private": true,
+                "description": "Synced from GitLab"
+            }]]]>
+        </http:body>
+    </http:request>
+    
+    <logger level="INFO" message="Created GitHub repository: #[vars.repoName]" doc:name="Log Repo Created" />
+</sub-flow>
+	<error-handler name="Global_Error_Handler">
+    <on-error-propagate type="ANY">
+        <logger level="ERROR" message="Error occurred: #[error.description]" doc:name="Log Error" />
+        <set-payload value="#[output application/json --- {
+            'status': 'error',
+            'message': error.description,
+            'type': error.errorType.identifier
+        }]" doc:name="Set Error Response" />
+    </on-error-propagate>
+</error-handler>
+	<flow name="github-to-gitlab-sync-flow">
+    <!-- Existing flow configuration -->
+    <error-handler ref="Global_Error_Handler" />
+</flow>
+
+<flow name="gitlab-to-github-sync-flow">
+    <!-- Existing flow configuration -->
+    <error-handler ref="Global_Error_Handler" />
+</flow>
+	<sub-flow name="process-github-repo-creation">
+    <logger level="INFO" message="Processing GitHub repository creation event" doc:name="Log Repo Creation Start"/>
+    
+    <!-- Extract repository details from GitHub payload -->
+    <set-variable variableName="repoName" value="#[payload.repository.name]" doc:name="Extract Repository Name"/>
+    <set-variable variableName="repoDescription" value="#[payload.repository.description]" doc:name="Extract Repository Description"/>
+    <set-variable variableName="repoPrivate" value="#[payload.repository.private]" doc:name="Extract Repository Visibility"/>
+    
+    <!-- Create GitLab repository with equivalent settings -->
+    <http:request method="POST" path="/projects" config-ref="GitLab_API_Request_Configuration" doc:name="Create GitLab Repository">
+        <http:body><![CDATA[#[output application/json
+            --- 
+            {
+                "name": vars.repoName,
+                "namespace_id": "${gitlab.owner}",
+                "description": vars.repoDescription default "Synced from GitHub",
+                "visibility": if (vars.repoPrivate) "private" else "public",
+                "initialize_with_readme": true
+            }]]]>
+        </http:body>
+    </http:request>
+    
+    <!-- Verify repository creation response -->
+    <choice doc:name="Check Creation Success">
+        <when expression="#[attributes.statusCode == 201]">
+            <logger level="INFO" message="Successfully created GitLab repository: #[vars.repoName]" doc:name="Log Success"/>
+            <!-- Configure default branch if different from GitHub -->
+            <set-variable variableName="defaultBranch" value="#[payload.default_branch default 'main']" doc:name="Extract Default Branch"/>
+            <http:request method="POST" path="/projects/#[payload.id]/repository/branches" config-ref="GitLab_API_Request_Configuration" doc:name="Set Default Branch">
+                <http:body><![CDATA[#[output application/json
+                    --- 
+                    {
+                        "branch": vars.defaultBranch,
+                        "ref": "main"
+                    }]]]>
+                </http:body>
+            </http:request>
+        </when>
+        <otherwise>
+            <logger level="ERROR" message="Failed to create GitLab repository: #[payload]" doc:name="Log Creation Failure"/>
+        </otherwise>
+    </choice>
+    
+    <!-- Mirror initial repository content -->
+    <flow-ref name="sync-initial-repo-content" doc:name="Sync Initial Content"/>
+</sub-flow>
+
+<!-- Supporting sub-flow for initial content sync -->
+<sub-flow name="sync-initial-repo-content">
+    <logger level="INFO" message="Mirroring initial repository content" doc:name="Log Content Sync Start"/>
+    
+    <!-- Get GitHub repository contents -->
+    <http:request method="GET" path="/repos/jeeva-mulecraft/#[vars.repoName]/contents/" config-ref="GitHub_API_Request_Configuration" doc:name="Get GitHub Contents"/>
+    
+    <!-- Process each file in the root directory -->
+    <foreach collection="#[payload]" doc:name="For Each File">
+        <set-variable variableName="filePath" value="#[payload.path]" doc:name="Set File Path"/>
+        <set-variable variableName="fileSha" value="#[payload.sha]" doc:name="Set File SHA"/>
+        
+        <!-- Get file content from GitHub -->
+        <http:request method="GET" path="/repos/jeeva-mulecraft/#[vars.repoName]/git/blobs/#[vars.fileSha]" config-ref="GitHub_API_Request_Configuration" doc:name="Get File Content"/>
+        
+        <!-- Create file in GitLab -->
+        <http:request method="POST" path="/projects/jeeva-mulecraft%2F#[vars.repoName]/repository/files/#[vars.filePath]" config-ref="GitLab_API_Request_Configuration" doc:name="Create File in GitLab">
+            <http:body><![CDATA[#[output application/json
+                --- 
+                {
+                    "branch": "main",
+                    "content": "#[payload.content]",
+                    "commit_message": "Initial sync from GitHub"
+                }]]]>
+            </http:body>
+        </http:request>
+    </foreach>
+    
+    <logger level="INFO" message="Completed initial content synchronization" doc:name="Log Content Sync Complete"/>
+</sub-flow>
+	<sub-flow name="send-success-response">
+    <!-- Standardized success response generator -->
+    <logger level="DEBUG" message="Generating success response" doc:name="Log Response Initiation"/>
+    
+    <!-- Set consistent response format -->
+    <set-payload value='#[output application/json --- {"status": "success"}]' doc:name="Create Response Payload"/>
+    
+    <!-- Configure HTTP response metadata -->
+    <respond doc:name="Send HTTP Response">
+        <http:response statusCode="200">
+            <http:headers>#[{"Content-Type": "application/json"}]</http:headers>
+        </http:response>
+    </respond>
+    
+    <!-- Post-response logging -->
+    <logger level="DEBUG" message="Success response sent successfully" doc:name="Log Response Completion"/>
+</sub-flow>
+	<sub-flow name="process-gitlab-branch-creation">
+    <logger level="INFO" message="Processing GitLab branch creation event" doc:name="Log Branch Creation Start"/>
+    
+    <!-- Extract branch details from GitLab payload -->
+    <set-variable variableName="repoName" value="#[payload.project.name]" doc:name="Extract Repository Name"/>
+    <set-variable variableName="newBranch" value="#[payload.ref replace 'refs/heads/' with '']" doc:name="Extract New Branch Name"/>
+    <set-variable variableName="baseBranch" value="#[payload.project.default_branch default 'main']" doc:name="Extract Base Branch"/>
+    
+    <!-- Get GitHub repository details -->
+    <http:request method="GET" path="/repos/${github.owner}/#[vars.repoName]" config-ref="GitHub_API_Request_Configuration" doc:name="Verify GitHub Repository">
+        <http:error-response-validator>
+            <http:success-status-code-validator values="200,404"/>
+        </http:error-response-validator>
+    </http:request>
+    
+    <choice doc:name="Check Repo Existence">
+        <when expression="#[attributes.statusCode == 404]">
+            <flow-ref name="create-github-repo-from-gitlab" doc:name="Create Missing Repository"/>
+        </when>
+    </choice>
+    
+    <!-- Get base branch SHA from GitHub -->
+    <http:request method="GET" path="/repos/${github.owner}/#[vars.repoName]/git/ref/heads/#[vars.baseBranch]" config-ref="GitHub_API_Request_Configuration" doc:name="Get Base Branch SHA"/>
+    
+    <set-variable variableName="baseSha" value="#[payload.object.sha]" doc:name="Extract Commit SHA"/>
+    
+    <!-- Create new branch in GitHub -->
+    <http:request method="POST" path="/repos/${github.owner}/#[vars.repoName]/git/refs" config-ref="GitHub_API_Request_Configuration" doc:name="Create GitHub Branch">
+        <http:body><![CDATA[#[output application/json
+            --- 
+            {
+                "ref": "refs/heads/#[vars.newBranch]",
+                "sha": vars.baseSha
+            }]]]>
+        </http:body>
+    </http:request>
+    
+    <!-- Verify branch creation -->
+    <choice doc:name="Check Creation Success">
+        <when expression="#[attributes.statusCode == 201]">
+            <logger level="INFO" message="Created branch #[vars.newBranch] in GitHub repository #[vars.repoName]" doc:name="Log Success"/>
+            <!-- Add sync marker to prevent loops -->
+            <set-variable variableName="syncSource" value="gitlab" doc:name="Update Sync Marker"/>
+        </when>
+        <otherwise>
+            <logger level="ERROR" message="Failed to create branch: #[payload]" doc:name="Log Failure"/>
+            <raise-error type="SYNC:BRANCH_CREATION_FAILED" description="GitHub branch creation failed" doc:name="Raise Error"/>
+        </otherwise>
+    </choice>
+</sub-flow>
+
+<!-- Supporting repository creation sub-flow -->
+<sub-flow name="create-github-repo-from-gitlab">
+    <logger level="INFO" message="Creating missing repository #[vars.repoName] in GitHub" doc:name="Log Repo Creation"/>
+    
+    <http:request method="POST" path="/user/repos" config-ref="GitHub_API_Request_Configuration" doc:name="Create GitHub Repository">
+        <http:body><![CDATA[#[output application/json
+            --- 
+            {
+                "name": vars.repoName,
+                "private": true,
+                "description": "Auto-created from GitLab sync"
+            }]]]>
+        </http:body>
+    </http:request>
+    
+    <logger level="INFO" message="Created GitHub repository #[vars.repoName]" doc:name="Log Repo Success"/>
+</sub-flow>
+	
+	</mule>

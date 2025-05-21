@@ -1,0 +1,8 @@
+github:
+  token: "![GITHUB_TOKEN]"
+  owner: "![GITHUB_OWNER]"
+gitlab:
+  token: "![GITLAB_TOKEN]"
+  owner: "![GITLAB_OWNER]"
+sync:
+  token: "![SYNC_TOKEN]"
