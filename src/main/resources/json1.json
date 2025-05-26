@@ -1,0 +1,48 @@
+{
+    "$schema":"http://json-schema.org/draft-04/schema#",
+    "title": "Products",
+    "description": "Product list catlog",
+    "type":"object",
+    "properties": {
+        "productId":{
+            "description": "unique identifer for a product",
+            "type": "number"
+        },
+        "productName":{
+            "description": "Name of the product",
+            "type":"string"
+        },
+        "price":{
+            "description": "Price of the product",
+            "type": "number",
+            "minimum": 0
+        },
+        "tags":{
+            "description": "Tags for the product",
+            "type":"array",
+            "items":{
+                "type": "string"
+            }
+        },
+        "dimensions":{
+            "description": "Product's dimensions",
+            "type":"object",
+            "properties": {
+                "length":{
+                    "description": "Length of the product",
+                    "type":"number"
+                },
+                "width":{
+                    "description": "Width of the product",
+                    "type":"number"
+                },
+                "height":{
+                    "description": "Height of the product",
+                    "type": "number"
+                }
+            },
+            "required":["length", "width", "height"]
+        }
+    },
+    "required":["productId", "productName", "price", "dimensions"]
+}
