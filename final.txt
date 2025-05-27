@@ -1,0 +1,60 @@
+{
+  "ref": "refs/heads/main",
+  "before": "abc123def456...",
+  "after": "def456ghi789...",
+  "repository": {
+    "id": 123456789,
+    "name": "gitSync",
+    "full_name": "myusername/my-awesome-repo",
+    "owner": {
+      "login": "myusername",
+      "id": 12345,
+      "type": "User"
+    },
+    "private": false,
+    "html_url": "https://github.com/myusername/my-awesome-repo",
+    "clone_url": "https://github.com/myusername/my-awesome-repo.git",
+    "git_url": "git://github.com/myusername/my-awesome-repo.git",
+    "ssh_url": "git@github.com:myusername/my-awesome-repo.git",
+    "default_branch": "main"
+  },
+  "pusher": {
+    "name": "myusername",
+    "email": "user@example.com"
+  },
+  "sender": {
+    "login": "myusername",
+    "id": 12345,
+    "type": "User"
+  },
+  "commits": [
+    {
+      "id": "def456ghi789...",
+      "message": "Fix bug in user authentication",
+      "timestamp": "2025-05-25T10:30:00Z",
+      "url": "https://github.com/myusername/my-awesome-repo/commit/def456ghi789...",
+      "author": {
+        "name": "John Doe",
+        "email": "john@example.com",
+        "username": "johndoe"
+      },
+      "committer": {
+        "name": "John Doe",
+        "email": "john@example.com",
+        "username": "johndoe"
+      },
+      "added": ["src/auth/new-feature.js"],
+      "removed": [],
+      "modified": ["src/auth/login.js", "README.md"]
+    }
+  ],
+  "head_commit": {
+    "id": "def456ghi789...",
+    "message": "Fix bug in user authentication",
+    "timestamp": "2025-05-25T10:30:00Z",
+    "author": {
+      "name": "John Doe",
+      "email": "john@example.com"
+    }
+  }
+}
