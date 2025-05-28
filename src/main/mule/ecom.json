@@ -1,0 +1,189 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "title": "E-commerce",
+    "description": "Schema for e-commerce order",
+    "type":"object",
+    "properties": {
+        "orderId":{
+            "description": "Unique identifer for order",
+            "type": "string"
+        },
+        "customer":{
+            "description": "Customer's details",
+            "type":"object",
+            "properties": {
+                "customerId":{
+                    "description": "Unique identifer for customer",
+                    "type": "string"
+                },
+                "name":{
+                    "description": "Customer's full name",
+                    "type":"string"
+                },
+                "email": {
+                    "description": "Customer's email",
+                    "format":"email",
+                    "type":"string"
+                },
+                "phone":{
+                    "description": "Customer's phone number",
+                    "type":"number"
+                },
+                "addressess":{
+                    "type":"array",
+                    "items":[
+                        {
+                            "type":"object",
+                            "properties": {
+                                "type":{
+                                    "type":"string"
+                                },
+                                "street":{
+                                    "type":"string"
+                                },
+                                "city":{
+                                    "type":"string"
+                                },
+                                "postalCode":{
+                                    "type":"string"
+                                },
+                                "country":{
+                                    "type":"string"
+                                }
+                            },
+                            "required":["type", "street", "city", "postalCode", "country"]
+                        },
+                        {
+                            "type":"object",
+                            "properties": {
+                                "type":{
+                                    "type":"string"
+                                },
+                                "street":{
+                                    "type":"string"
+                                },
+                                "city":{
+                                    "type":"string"
+                                },
+                                "postalCode":{
+                                    "type":"string"
+                                },
+                                "country":{
+                                    "type":"string"
+                                }
+                            },
+                            "required":["type", "street", "city", "postalCode", "country"]
+                        }
+                    ]
+                }
+            }, 
+            "required":["customerId", "name", "email","phone", "addressess"]
+        },   
+        "items":{
+                    "type":"array",
+                    "items":[
+                        {
+                            "type":"object",
+                            "properties": {
+                                "productId":{
+                                    "type":"string"
+                                },
+                                "name":{
+                                    "type":"string"
+                                },
+                                "quantity":{
+                                    "type":"number"
+                                },
+                                "price":{
+                                    "type":"integer",
+                                    "minimum": 0
+                                },
+                                "options":{
+                                    "type":"object",
+                                    "properties": {
+                                        "color":{
+                                            "type":"string"
+                                        },
+                                        "warranty":{
+                                            "type":"boolean"
+                                        }
+                                    },
+                                    "required":["color", "warranty"]
+                                }
+                            },
+                            "required":["productId", "name", "quantity", "price", "options"]
+                        },
+                        {
+                            "type":"object",
+                            "properties": {
+                                "productId":{
+                                    "type":"string"
+                                },
+                                "name":{
+                                    "type":"string"
+                                },
+                                "quantity":{
+                                    "type":"number"
+                                },
+                                "price":{
+                                    "type":"integer",
+                                    "minimum": 0
+                                },
+                                "options":{
+                                    "type":"object",
+                                    "properties": {
+                                        "color":{
+                                            "type":"string"
+                                        },
+                                        "warranty":{
+                                            "type":"boolean"
+                                        }
+                                    },
+                                    "required":["color", "warranty"]
+                                }
+                            },
+                            "required":["productId", "name", "quantity", "price", "options"]
+                        }
+                    ]
+                },
+        "payment":{
+                    "type":"object",
+                    "properties": {
+                        "method":{
+                            "type":"string"
+                        },
+                        "transactionId":{
+                             "type": "string"
+                        },
+                        "card":{
+                            "type":"object",
+                            "properties": {
+                                "cardHolder":{
+                                    "type":"string"
+                                },
+                                "cardNumber":{
+                                    "type":"number"
+                                },
+                                "expiry":{
+                                    "type":"number"
+                                },
+                                "cvv":{
+                                    "type":"number"
+                                }
+                            },
+                            "required":["cardHolder", "cardNumber", "expiry", "cvv"]
+                        }
+                    }
+                },
+         "status":{
+                "type":"string"
+        },
+         "placedAt":{
+                 "type":"string"
+        },
+         "notes":{
+                 "type":"null"
+        }
+    },
+    "required":["orderId", "customer", "items", "payment", "status", "placedAt", "notes"]
+}
